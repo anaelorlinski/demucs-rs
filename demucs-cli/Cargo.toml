@@ -9,12 +9,12 @@ path = "src/main.rs"
 
 [features]
 default = []
-cpu     = ["demucs-core/ndarray", "burn/ndarray"]
+cpu     = ["burn/flex"]
 
 [dependencies]
 demucs-core = { path = "../demucs-core", features = ["wgpu", "autotune", "fusion"] }
-burn = { version = "0.20.1", features = ["wgpu", "autotune", "fusion"] }
-cubecl = { version = "0.9", default-features = false }
+burn = { version = "0.22.1", features = ["wgpu", "autotune", "fusion"] }
+cubecl = { version = "0.11", default-features = false }
 clap = { version = "4", features = ["derive"] }
 hound = "3"
 symphonia = { version = "0.5", features = ["mp3", "flac", "ogg", "wav", "pcm", "aac", "isomp4", "aiff"] }
@@ -25,10 +25,10 @@ pollster = "0.4"
 demucs-mcp = { path = "../demucs-mcp" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-burn = { version = "0.20.1", features = ["metal"] }
+burn = { version = "0.22.1", features = ["metal"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-burn = { version = "0.20.1", features = ["vulkan"] }
+burn = { version = "0.22.1", features = ["vulkan"] }
 
 [dev-dependencies]
 serde_json = "1"

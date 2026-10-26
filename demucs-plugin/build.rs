@@ -51,6 +51,10 @@ fn build_swift_ui() {
     println!("cargo:rustc-link-lib=framework=SwiftUI");
     println!("cargo:rustc-link-lib=framework=UniformTypeIdentifiers");
 
+    // cubecl (via the `buildid` crate) reads the Mach-O header through `_mh_execute_header`, a symbol
+    // only executables define. Leave it to the dynamic loader, which binds it to the host's header.
+    println!("cargo:rustc-cdylib-link-arg=-Wl,-U,__mh_execute_header");
+
     // Link Swift runtime libraries
     if let Some(swift_lib_path) = find_swift_lib_path() {
         println!("cargo:rustc-link-search=native={}", swift_lib_path);

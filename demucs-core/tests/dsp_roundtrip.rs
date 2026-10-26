@@ -5,14 +5,10 @@
 //! zero-padded border frames on inverse, so perfect round-trip is NOT expected
 //! at boundaries — the model is trained with this exact asymmetry.
 
-use std::f32::consts::PI;
-
-use burn::backend::NdArray;
 use burn::tensor::Tensor;
 use demucs_core::dsp::cac::{cac_to_stft, stft_to_cac};
 use demucs_core::dsp::stft::Stft;
-
-type B = NdArray<f32>;
+use std::f32::consts::PI;
 
 const N_FFT: usize = 4096;
 const HOP_LENGTH: usize = 1024;
@@ -87,13 +83,13 @@ fn stft_cac_roundtrip_mono() {
     let spec = stft.forward(&left).unwrap();
 
     // Forward: complex spectrogram → CaC tensor [2, N_FFT/2, T]
-    let cac = stft_to_cac::<B>(&spec, N_FFT, &device);
+    let cac = stft_to_cac(&spec, N_FFT, &device);
     let [ch, freq_bins, _n_frames] = cac.dims();
     assert_eq!(ch, 2);
     assert_eq!(freq_bins, N_FFT / 2);
 
     // Inverse: CaC tensor → complex spectrogram (adds Nyquist) → waveform
-    let spec_rt = pollster::block_on(cac_to_stft::<B>(&cac)).unwrap();
+    let spec_rt = pollster::block_on(cac_to_stft(&cac)).unwrap();
     let reconstructed = stft.inverse(&spec_rt, n_samples).unwrap();
 
     assert_eq!(reconstructed.len(), n_samples);
@@ -139,9 +135,9 @@ fn full_stereo_dsp_roundtrip() {
     let bins = N_FFT / 2;
     let n_frames = left_spec.len() / bins;
 
-    let left_cac = stft_to_cac::<B>(&left_spec, N_FFT, &device); // [2, F, T]
-    let right_cac = stft_to_cac::<B>(&right_spec, N_FFT, &device); // [2, F, T]
-    let freq: Tensor<B, 4> = Tensor::cat(vec![left_cac, right_cac], 0) // [4, F, T]
+    let left_cac = stft_to_cac(&left_spec, N_FFT, &device); // [2, F, T]
+    let right_cac = stft_to_cac(&right_spec, N_FFT, &device); // [2, F, T]
+    let freq: Tensor<4> = Tensor::cat(vec![left_cac, right_cac], 0) // [4, F, T]
         .unsqueeze_dim(0); // [1, 4, F, T]
 
     assert_eq!(freq.dims()[2], N_FFT / 2);
@@ -159,13 +155,13 @@ fn full_stereo_dsp_roundtrip() {
     // iSTFT reconstructs padded_len, then we trim to n_samples
     let left_recon = stft
         .inverse(
-            &pollster::block_on(cac_to_stft::<B>(&left_cac_out)).unwrap(),
+            &pollster::block_on(cac_to_stft(&left_cac_out)).unwrap(),
             padded_len,
         )
         .unwrap();
     let right_recon = stft
         .inverse(
-            &pollster::block_on(cac_to_stft::<B>(&right_cac_out)).unwrap(),
+            &pollster::block_on(cac_to_stft(&right_cac_out)).unwrap(),
             padded_len,
         )
         .unwrap();

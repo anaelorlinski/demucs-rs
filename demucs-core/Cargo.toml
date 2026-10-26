@@ -27,12 +27,12 @@ realfft = "3.5.0"
 # this crate's own `fusion`/`autotune` features (see [features]); everything
 # demucs-core needs (tensor, nn, module) lives in non-optional burn sub-crates
 # that only require `std`.
-burn = { version = "0.20.1", default-features = false, features = ["std"] }
-safetensors = "0.5"
+burn = { version = "0.22.1", default-features = false, features = ["std"] }
+safetensors = "0.8"
 half = "2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-dirs = "5"
+dirs = "7"
 
 [dev-dependencies]
 # Deliberately keeps burn's default features (unlike the [dependencies] entry
@@ -41,8 +41,8 @@ dirs = "5"
 # `burn/default` crate-wide and cannot catch breakage in the defaults-off
 # config that real consumers get — the `cargo check -p demucs-core` steps in
 # the CI lint job cover that, since `-p` excludes dev-dependencies.
-burn = { version = "0.20.1", features = ["ndarray"] }
-safetensors = "0.5"
-pollster = "0.4"
+burn = { version = "0.22.1", features = ["flex"] }
+safetensors = "0.8"
+pollster = "1"
 bytemuck = "1"
 hound = "3"

@@ -6,8 +6,10 @@ use std::thread;
 
 use crossbeam_channel::Receiver;
 
-use burn::backend::wgpu::{graphics::AutoGraphicsApi, init_setup, RuntimeOptions};
-use cubecl::config::{autotune::AutotuneConfig, cache::CacheConfig, GlobalConfig};
+use burn::prelude::Device;
+use cubecl::config::{
+    cache::CacheConfig, environment::EnvironmentConfig, CubeClRuntimeConfig, RuntimeConfig,
+};
 
 use demucs_core::model::metadata::{
     self, ModelInfo, ALL_MODELS, HTDEMUCS_6S_ID, HTDEMUCS_FT_ID, HTDEMUCS_ID,
@@ -24,8 +26,6 @@ use crate::shared_state::{
     DisplaySpectrogram, SharedState, SourceAudio, StemBuffers, StemChannel, WaveformPeaks,
 };
 use crate::state::PluginPhase;
-
-type B = burn::backend::wgpu::Wgpu;
 
 /// Commands sent from the GUI/plugin to the inference thread.
 pub enum InferenceCommand {
@@ -78,29 +78,38 @@ impl InferenceThread {
 }
 
 /// Ensure GPU is initialized exactly once across all plugin instances.
-static GPU_INIT: OnceLock<()> = OnceLock::new();
+static GPU_INIT: OnceLock<Result<Device, String>> = OnceLock::new();
 
-fn init_gpu() {
-    GPU_INIT.get_or_init(|| {
-        GlobalConfig::set(GlobalConfig {
-            autotune: AutotuneConfig {
-                cache: CacheConfig::Global,
+fn init_gpu() -> Result<Device, String> {
+    GPU_INIT
+        .get_or_init(|| {
+            // Autotune results and compiled kernels persist in the user cache directory.
+            CubeClRuntimeConfig::set(CubeClRuntimeConfig {
+                environment: EnvironmentConfig {
+                    path: CacheConfig::Global,
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        });
-        let device = burn::backend::wgpu::WgpuDevice::default();
-        let options = RuntimeOptions {
-            tasks_max: 128,
-            ..Default::default()
-        };
-        init_setup::<AutoGraphicsApi>(&device, options);
-    });
+            });
+            Device::wgpu_options()
+                .tasks_max(128)
+                .init()
+                .map_err(|e| e.to_string())
+        })
+        .clone()
+}
+
+/// Whether the persistent autotune / kernel cache already holds an environment.
+fn gpu_cache_exists() -> bool {
+    CacheConfig::Global
+        .root()
+        .join(format!("{}.db", EnvironmentConfig::default().name))
+        .is_file()
 }
 
 fn inference_loop(shared: Arc<SharedState>, cmd_rx: Receiver<InferenceCommand>) {
     // Cached model (kept alive across separations of the same variant)
-    let mut cached_model: Option<(ModelVariant, Demucs<B>)> = None;
+    let mut cached_model: Option<(ModelVariant, Demucs)> = None;
 
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
@@ -192,7 +201,7 @@ fn handle_separate(
     shared: &Arc<SharedState>,
     model_variant: ModelVariant,
     clip: ClipSelection,
-    cached_model: &mut Option<(ModelVariant, Demucs<B>)>,
+    cached_model: &mut Option<(ModelVariant, Demucs)>,
 ) {
     // Reset cancellation flag
     shared.cancel_requested.store(false, Ordering::Relaxed);
@@ -275,22 +284,27 @@ fn handle_separate(
         stage_label: "Loading model...".to_string(),
     };
 
+    // Checked before the GPU starts: initialising the runtime opens (creates) the cache.
+    let had_cache = gpu_cache_exists();
+
     // Init GPU (once)
-    init_gpu();
+    let device = match init_gpu() {
+        Ok(device) => device,
+        Err(e) => {
+            set_error(shared, format!("Failed to initialise the GPU: {e}"));
+            return;
+        }
+    };
 
     // Load or reuse model
     let needs_new_model = !matches!(cached_model, Some((variant, _)) if *variant == model_variant);
 
     if needs_new_model {
         let opts = model_options_for_variant(model_variant, info);
-        let device = burn::backend::wgpu::WgpuDevice::default();
-        match Demucs::<B>::from_bytes(opts, &bytes, device) {
+        match Demucs::from_bytes(opts, &bytes, device) {
             Ok(model) => {
                 // Warmup if needed
-                let cache_dir = CacheConfig::Global.root().join("autotune");
-                let has_cache = cache_dir.is_dir()
-                    && std::fs::read_dir(&cache_dir).is_ok_and(|mut d| d.next().is_some());
-                if !has_cache {
+                if !had_cache {
                     *shared.stage_label.write() = "Compiling GPU shaders...".to_string();
                     pollster::block_on(model.warmup());
                 }

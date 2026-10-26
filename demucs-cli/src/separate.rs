@@ -11,16 +11,11 @@ use demucs_core::{num_chunks, Demucs, ModelOptions};
 
 use crate::{audio, download};
 
+use burn::prelude::Device;
 #[cfg(not(feature = "cpu"))]
-use burn::backend::wgpu::{graphics::AutoGraphicsApi, init_setup, RuntimeOptions};
-#[cfg(not(feature = "cpu"))]
-use cubecl::config::{autotune::AutotuneConfig, cache::CacheConfig, GlobalConfig};
-
-#[cfg(not(feature = "cpu"))]
-pub type B = burn::backend::wgpu::Wgpu;
-
-#[cfg(feature = "cpu")]
-pub type B = burn::backend::NdArray<f32>;
+use cubecl::config::{
+    cache::CacheConfig, environment::EnvironmentConfig, CubeClRuntimeConfig, RuntimeConfig,
+};
 
 pub struct SeparateRequest {
     pub input: PathBuf,
@@ -64,9 +59,8 @@ impl Reporter for StderrReporter {
 /// Keeps the last loaded model so repeated calls skip weight load and GPU init.
 #[derive(Default)]
 pub struct ModelCache {
-    #[allow(dead_code)]
-    gpu_ready: bool,
-    loaded: Option<(String, Demucs<B>)>,
+    device: Option<Device>,
+    loaded: Option<(String, Demucs)>,
 }
 
 pub fn resolve_model_info(model_id: &str) -> Result<&'static ModelInfo> {
@@ -157,34 +151,44 @@ fn load_model(
 
     let bytes = ensure_weights(info, reporter)?;
     reporter.status("Loading model...");
-    let device = Default::default();
-
+    // Checked before the GPU starts: initialising the runtime opens (creates) the cache.
     #[cfg(not(feature = "cpu"))]
-    if !cache.gpu_ready {
-        GlobalConfig::set(GlobalConfig {
-            autotune: AutotuneConfig {
-                cache: CacheConfig::Global,
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-        let options = RuntimeOptions {
-            tasks_max: 128,
-            ..Default::default()
-        };
-        init_setup::<AutoGraphicsApi>(&device, options);
-        cache.gpu_ready = true;
-    }
+    let cached = CacheConfig::Global
+        .root()
+        .join(format!("{}.db", EnvironmentConfig::default().name))
+        .is_file();
 
-    let model = Demucs::<B>::from_bytes(build_options(info, selected), &bytes, device)
+    let device = match &cache.device {
+        Some(d) => d.clone(),
+        None => {
+            #[cfg(not(feature = "cpu"))]
+            let d = {
+                // Autotune results and compiled kernels persist in the user cache directory.
+                CubeClRuntimeConfig::set(CubeClRuntimeConfig {
+                    environment: EnvironmentConfig {
+                        path: CacheConfig::Global,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                });
+                Device::wgpu_options()
+                    .tasks_max(128)
+                    .init()
+                    .context("Failed to initialise the GPU")?
+            };
+            #[cfg(feature = "cpu")]
+            let d = Device::default();
+            cache.device = Some(d.clone());
+            d
+        }
+    };
+
+    let model = Demucs::from_bytes(build_options(info, selected), &bytes, device)
         .context("Failed to load model weights")?;
 
     // Warm up GPU shaders if the autotune cache is empty (first run only).
     #[cfg(not(feature = "cpu"))]
     {
-        let cache_dir = CacheConfig::Global.root().join("autotune");
-        let cached = cache_dir.is_dir()
-            && std::fs::read_dir(&cache_dir).is_ok_and(|mut d| d.next().is_some());
         if !cached {
             reporter.status("Pre-compiling GPU shaders (first run only)...");
             pollster::block_on(model.warmup());

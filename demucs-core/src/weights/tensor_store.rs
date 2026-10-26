@@ -242,7 +242,7 @@ mod tests {
         let views_ref: Vec<(&str, safetensors::tensor::TensorView<'_>)> =
             views.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
 
-        serialize(views_ref, &None).unwrap()
+        serialize(views_ref, None).unwrap()
     }
 
     fn cast_f32_to_u8(data: &[f32]) -> &[u8] {

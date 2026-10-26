@@ -1,8 +1,7 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Once;
+use std::sync::{Mutex, Once};
 
-use burn::backend::wgpu::graphics::WebGpu;
-use burn::backend::wgpu::{init_setup_async, RuntimeOptions, Wgpu, WgpuDevice};
+use burn::prelude::Device;
+use burn::tensor::wgpu::WgpuBackend;
 use demucs_core::dsp::spectrogram;
 use demucs_core::listener::{ForwardEvent, ForwardListener};
 use demucs_core::model::metadata::{
@@ -66,10 +65,8 @@ impl ForwardListener for ProgressListener {
     }
 }
 
-type B = Wgpu;
-
 static PANIC_HOOK: Once = Once::new();
-static WGPU_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static WGPU_DEVICE: Mutex<Option<Device>> = Mutex::new(None);
 
 /// Install panic hook so Rust panics show real messages in the browser console.
 fn ensure_panic_hook() {
@@ -79,17 +76,18 @@ fn ensure_panic_hook() {
 }
 
 /// Initialize WebGPU runtime exactly once, returning the device.
-async fn ensure_wgpu() -> WgpuDevice {
-    let device = WgpuDevice::default();
-    if !WGPU_INITIALIZED.load(Ordering::SeqCst) {
-        let options = RuntimeOptions {
-            tasks_max: 128,
-            ..Default::default()
-        };
-        init_setup_async::<WebGpu>(&device, options).await;
-        WGPU_INITIALIZED.store(true, Ordering::SeqCst);
+async fn ensure_wgpu() -> Result<Device, JsError> {
+    if let Some(device) = WGPU_DEVICE.lock().unwrap().clone() {
+        return Ok(device);
     }
-    device
+    let device = Device::wgpu_options()
+        .graphics_api(WgpuBackend::WebGpu)
+        .tasks_max(128)
+        .init_async()
+        .await
+        .map_err(|e| JsError::new(&format!("WebGPU init failed: {e}")))?;
+    *WGPU_DEVICE.lock().unwrap() = Some(device.clone());
+    Ok(device)
 }
 
 /// Map a model ID string to ModelOptions.
@@ -246,13 +244,13 @@ pub fn validate_model_weights(bytes: &[u8], model_id: &str) -> Result<JsValue, J
 pub async fn warmup_model(model_bytes: &[u8], model_id: &str) -> Result<(), JsError> {
     ensure_panic_hook();
 
-    let device = ensure_wgpu().await;
+    let device = ensure_wgpu().await?;
     // For warmup, just use default 4 stems — we only need to trigger shaders
     let opts = parse_model_opts(
         model_id,
         vec![StemId::Drums, StemId::Bass, StemId::Other, StemId::Vocals],
     )?;
-    let model = Demucs::<B>::from_bytes(opts, model_bytes, device)
+    let model = Demucs::from_bytes(opts, model_bytes, device)
         .map_err(|e| JsError::new(&format!("Warmup model load failed: {}", e)))?;
 
     model.warmup().await;
@@ -323,9 +321,9 @@ pub async fn separate(
     let stems: Vec<StemId> = stem_strs.iter().filter_map(|s| StemId::parse(s)).collect();
     let opts = parse_model_opts(model_id, stems)?;
 
-    let device = ensure_wgpu().await;
+    let device = ensure_wgpu().await?;
 
-    let model = Demucs::<B>::from_bytes(opts, model_bytes, device)
+    let model = Demucs::from_bytes(opts, model_bytes, device)
         .map_err(|e| JsError::new(&format!("Failed to load model: {}", e)))?;
 
     let mut listener = ProgressListener::new(on_progress);

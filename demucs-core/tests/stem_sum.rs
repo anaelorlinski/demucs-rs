@@ -6,13 +6,9 @@
 //! - GPU access (Metal on macOS, Vulkan on Linux/Windows)
 //!
 //! Run with: `cargo test -p demucs-core --test stem_sum -- --ignored`
-
-use burn::backend::NdArray;
 use demucs_core::provider::fs::FsProvider;
 use demucs_core::provider::ModelProvider;
 use demucs_core::{Demucs, ModelOptions};
-
-type B = NdArray<f32>;
 
 /// Compute Signal-to-Distortion Ratio in dB.
 /// SDR = 10 * log10( sum(ref^2) / sum((ref - est)^2) )
@@ -42,8 +38,8 @@ fn stems_sum_to_original() {
         .expect("htdemucs model not cached — download it first with the CLI or web app");
 
     let device = Default::default();
-    let demucs = Demucs::<B>::from_bytes(ModelOptions::FourStem, &bytes, device)
-        .expect("Failed to load model");
+    let demucs =
+        Demucs::from_bytes(ModelOptions::FourStem, &bytes, device).expect("Failed to load model");
 
     // 2. Read test audio
     let wav_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../test_short_44k.wav");
